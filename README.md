@@ -48,8 +48,11 @@ does not take and moves a request to the nearest one that it does:
 | `max` | `max` |
 
 A model without `none` cannot be switched off — `off` is hidden (e.g. `glm-5.3`: low/high/max).
-A model that reports `supports_reasoning: true` but no efforts gets no map and pi sends its
-levels as is; fix that on the LiteLLM side (`supports_reasoning: false` or the efforts list).
+A model with reasoning switched off on the deployment itself (`reasoning_effort: "none"`, `enable_thinking: false` or `thinking.type: "disabled"` in `litellm_params` of every deployment, as `/model/info` shows them) is registered with `reasoning: false`, so pi offers only `off` —
+that is how `*-no-reasoning` groups look, even though LiteLLM reports `supports_reasoning: true`
+for them. Only those reasoning fields are read from `litellm_params`; the rest of it (provider
+credentials) is neither kept nor logged. A reasoning model with no efforts listed and nothing
+pinned gets no map, and pi sends its levels as is.
 
 ## Known limits
 

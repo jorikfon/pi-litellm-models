@@ -52,3 +52,21 @@ test("only models the key may call, cache costs from /model/info", () => {
   assert.deepEqual(pickGroups(groups, undefined).map((g) => g.model_group), ["deepseek-v4-pro", "zai/glm-5.3"])
   assert.equal(toModel(groups[0], allowed.get("deepseek-v4-pro")).cost.cacheRead, allowed.get("deepseek-v4-pro")!.cacheRead)
 })
+
+test("reasoning pinned off on every deployment hides the levels", () => {
+  const km = keyModels([
+    { model_name: "qwen3.8-flash-no-reasoning", litellm_params: { enable_thinking: false } },
+    { model_name: "deepseek-v4-flash-no-reasoning", litellm_params: { reasoning_effort: "none" } },
+    { model_name: "deepseek-v4-flash", litellm_params: {} },
+    { model_name: "mixed", litellm_params: { reasoning_effort: "none" } },
+    { model_name: "mixed", litellm_params: {} },
+  ])
+  const group = { model_group: "x", supports_reasoning: true, supported_reasoning_efforts: ["none", "low", "high"] }
+  for (const id of ["qwen3.8-flash-no-reasoning", "deepseek-v4-flash-no-reasoning"]) {
+    const m = toModel(group, km.get(id))
+    assert.equal(m.reasoning, false, id)
+    assert.equal(m.thinkingLevelMap, undefined, id)
+  }
+  assert.equal(toModel(group, km.get("deepseek-v4-flash")).reasoning, true)
+  assert.equal(toModel(group, km.get("mixed")).reasoning, true)
+})

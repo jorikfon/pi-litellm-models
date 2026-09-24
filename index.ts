@@ -64,45 +64,67 @@ export function thinkingLevelMap(efforts: string[] | null | undefined) {
   ) as Record<Level, string | null>
 }
 
-/** Один деплоймент из `GET /model/info`. `litellm_params` не читаем: там ссылки на ключи провайдеров. */
+/**
+ * Один деплоймент из `GET /model/info`. Из `litellm_params` читаем только reasoning-поля:
+ * остальное там — ссылки на ключи провайдеров, его не логируем и не храним.
+ */
 export type LiteLLMDeployment = {
   model_name: string
+  litellm_params?: {
+    reasoning_effort?: unknown
+    enable_thinking?: unknown
+    thinking?: { type?: unknown } | null
+  } | null
   model_info?: {
     cache_read_input_token_cost?: number | null
     cache_creation_input_token_cost?: number | null
   } | null
 }
 
-export type CacheCost = { cacheRead: number; cacheWrite: number }
+export type KeyModel = { cacheRead: number; cacheWrite: number; noReasoning: boolean }
+
+/** Reasoning выключен на самом деплойменте — уровни от клиента он всё равно не примет. */
+export function reasoningPinnedOff(d: LiteLLMDeployment): boolean {
+  const p = d.litellm_params ?? {}
+  return p.reasoning_effort === "none" || p.enable_thinking === false || p.thinking?.type === "disabled"
+}
 
 /**
- * Модели, доступные ключу, с ценой кэша. Первый деплоймент имени выигрывает.
+ * Модели, доступные ключу, с ценой кэша и признаком выключенного reasoning.
+ * Цена — от первого деплоймента имени; reasoning выключен, только если выключен у всех.
  * ponytail: при нескольких деплойментах с разной ценой берётся первая, не максимум.
  */
-export function keyModels(deployments: LiteLLMDeployment[]): Map<string, CacheCost> {
-  const out = new Map<string, CacheCost>()
+export function keyModels(deployments: LiteLLMDeployment[]): Map<string, KeyModel> {
+  const out = new Map<string, KeyModel>()
   for (const d of deployments) {
-    if (out.has(d.model_name)) continue
+    const seen = out.get(d.model_name)
+    if (seen) {
+      seen.noReasoning &&= reasoningPinnedOff(d)
+      continue
+    }
     out.set(d.model_name, {
       cacheRead: perMillion(d.model_info?.cache_read_input_token_cost),
       cacheWrite: perMillion(d.model_info?.cache_creation_input_token_cost),
+      noReasoning: reasoningPinnedOff(d),
     })
   }
   return out
 }
 
 /** Чат-группы, которые ключ может вызвать. Без списка ключа (`undefined`) — все чат-группы. */
-export function pickGroups(groups: LiteLLMGroup[], allowed?: Map<string, CacheCost>): LiteLLMGroup[] {
+export function pickGroups(groups: LiteLLMGroup[], allowed?: Map<string, KeyModel>): LiteLLMGroup[] {
   return groups.filter((g) => isChatGroup(g) && (!allowed || allowed.has(g.model_group)))
 }
 
 /** Модель в формате `registerProvider(...).models[]` pi. */
-export function toModel(group: LiteLLMGroup, cache?: CacheCost) {
+export function toModel(group: LiteLLMGroup, cache?: KeyModel) {
+  // У `*-no-reasoning` LiteLLM объявляет supports_reasoning, но деплоймент его выключает: меню уровней не нужно.
+  const reasoning = group.supports_reasoning === true && !cache?.noReasoning
   return {
     id: group.model_group,
     name: group.model_group,
-    reasoning: group.supports_reasoning === true,
-    thinkingLevelMap: thinkingLevelMap(group.supported_reasoning_efforts),
+    reasoning,
+    thinkingLevelMap: reasoning ? thinkingLevelMap(group.supported_reasoning_efforts) : undefined,
     input: (group.supports_vision === true ? ["text", "image"] : ["text"]) as ("text" | "image")[],
     cost: {
       input: perMillion(group.input_cost_per_token),
@@ -141,7 +163,7 @@ export async function fetchGroups(baseURL: string, apiKey?: string): Promise<Lit
  * а `/model/info` — только деплойменты, доступные ключу, но без уровней reasoning. Берём пересечение.
  * Если `/model/info` не отвечает или пуст — фильтра нет, как раньше.
  */
-export async function fetchKeyModels(baseURL: string, apiKey?: string): Promise<Map<string, CacheCost> | undefined> {
+export async function fetchKeyModels(baseURL: string, apiKey?: string): Promise<Map<string, KeyModel> | undefined> {
   try {
     const res = await fetch(`${proxyRoot(baseURL)}/model/info`, {
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
