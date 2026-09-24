@@ -1,0 +1,14 @@
+{
+  "name": "pi-litellm-models",
+  "version": "0.1.0",
+  "description": "pi extension: models of a LiteLLM proxy show up on their own, with the reasoning levels each one really takes",
+  "type": "module",
+  "main": "index.ts",
+  "files": ["index.ts", "README.md"],
+  "keywords": ["pi-package", "pi-extension", "litellm"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/jorikfon/pi-litellm-models.git" },
+  "pi": { "extensions": ["./index.ts"] },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": ">=0.87.0" },
+  "scripts": { "test": "node --test test/*.test.ts" }
+}
