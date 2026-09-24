@@ -64,8 +64,40 @@ export function thinkingLevelMap(efforts: string[] | null | undefined) {
   ) as Record<Level, string | null>
 }
 
+/** Один деплоймент из `GET /model/info`. `litellm_params` не читаем: там ссылки на ключи провайдеров. */
+export type LiteLLMDeployment = {
+  model_name: string
+  model_info?: {
+    cache_read_input_token_cost?: number | null
+    cache_creation_input_token_cost?: number | null
+  } | null
+}
+
+export type CacheCost = { cacheRead: number; cacheWrite: number }
+
+/**
+ * Модели, доступные ключу, с ценой кэша. Первый деплоймент имени выигрывает.
+ * ponytail: при нескольких деплойментах с разной ценой берётся первая, не максимум.
+ */
+export function keyModels(deployments: LiteLLMDeployment[]): Map<string, CacheCost> {
+  const out = new Map<string, CacheCost>()
+  for (const d of deployments) {
+    if (out.has(d.model_name)) continue
+    out.set(d.model_name, {
+      cacheRead: perMillion(d.model_info?.cache_read_input_token_cost),
+      cacheWrite: perMillion(d.model_info?.cache_creation_input_token_cost),
+    })
+  }
+  return out
+}
+
+/** Чат-группы, которые ключ может вызвать. Без списка ключа (`undefined`) — все чат-группы. */
+export function pickGroups(groups: LiteLLMGroup[], allowed?: Map<string, CacheCost>): LiteLLMGroup[] {
+  return groups.filter((g) => isChatGroup(g) && (!allowed || allowed.has(g.model_group)))
+}
+
 /** Модель в формате `registerProvider(...).models[]` pi. */
-export function toModel(group: LiteLLMGroup) {
+export function toModel(group: LiteLLMGroup, cache?: CacheCost) {
   return {
     id: group.model_group,
     name: group.model_group,
@@ -75,8 +107,8 @@ export function toModel(group: LiteLLMGroup) {
     cost: {
       input: perMillion(group.input_cost_per_token),
       output: perMillion(group.output_cost_per_token),
-      cacheRead: 0,
-      cacheWrite: 0,
+      cacheRead: cache?.cacheRead ?? 0,
+      cacheWrite: cache?.cacheWrite ?? 0,
     },
     contextWindow: toInt(group.max_input_tokens, DEFAULT_CONTEXT),
     maxTokens: toInt(group.max_output_tokens, DEFAULT_OUTPUT),
@@ -104,6 +136,28 @@ export async function fetchGroups(baseURL: string, apiKey?: string): Promise<Lit
   return body.data ?? []
 }
 
+/**
+ * `/model_group/info` отдаёт все публичные группы, в том числе чужие для ключа (запрос к ним — 403),
+ * а `/model/info` — только деплойменты, доступные ключу, но без уровней reasoning. Берём пересечение.
+ * Если `/model/info` не отвечает или пуст — фильтра нет, как раньше.
+ */
+export async function fetchKeyModels(baseURL: string, apiKey?: string): Promise<Map<string, CacheCost> | undefined> {
+  try {
+    const res = await fetch(`${proxyRoot(baseURL)}/model/info`, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const body = (await res.json()) as { data?: LiteLLMDeployment[] }
+    const models = keyModels(body.data ?? [])
+    if (models.size > 0) return models
+    throw new Error("empty list")
+  } catch (err) {
+    console.warn(`[litellm] model/info: ${err}; showing every model group, some may answer 403`)
+    return undefined
+  }
+}
+
 export default async function (pi: ExtensionAPI) {
   const baseURL = process.env.LITELLM_BASE_URL
   if (!baseURL) {
@@ -111,13 +165,14 @@ export default async function (pi: ExtensionAPI) {
     return
   }
   try {
-    const groups = await fetchGroups(baseURL, process.env.LITELLM_API_KEY)
+    const apiKey = process.env.LITELLM_API_KEY
+    const [groups, allowed] = await Promise.all([fetchGroups(baseURL, apiKey), fetchKeyModels(baseURL, apiKey)])
     pi.registerProvider("litellm", {
       name: "LiteLLM",
       baseUrl: baseURL,
       apiKey: "$LITELLM_API_KEY",
       api: "openai-completions",
-      models: groups.filter(isChatGroup).map(toModel),
+      models: pickGroups(groups, allowed).map((g) => toModel(g, allowed?.get(g.model_group))),
     })
   } catch (err) {
     // Бросать нельзя — pi не стартует. Молчать тоже: снаружи это выглядит как «нет моделей».

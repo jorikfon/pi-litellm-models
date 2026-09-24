@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { isChatGroup, thinkingLevelMap, toModel } from "../index.ts"
+import { isChatGroup, keyModels, pickGroups, thinkingLevelMap, toModel } from "../index.ts"
 
 test("thinkingLevelMap follows supported_reasoning_efforts", () => {
   // deepseek-v4-*: none/low/high/max
@@ -32,4 +32,23 @@ test("toModel maps limits, costs and vision", () => {
 test("embeddings are skipped, null mode is kept", () => {
   assert.equal(isChatGroup({ model_group: "ollama/bge-m3", mode: "embedding" }), false)
   assert.equal(isChatGroup({ model_group: "ollama/qwen2.5:7b", mode: null }), true)
+})
+
+test("only models the key may call, cache costs from /model/info", () => {
+  const groups = [
+    { model_group: "deepseek-v4-pro", mode: "chat" },
+    { model_group: "zai/glm-5.3", mode: "chat" },
+    { model_group: "ollama/bge-m3", mode: "embedding" },
+  ]
+  const allowed = keyModels([
+    { model_name: "deepseek-v4-pro", model_info: { cache_read_input_token_cost: 4.4e-8 } },
+    { model_name: "deepseek-v4-pro", model_info: { cache_read_input_token_cost: 9e-8 } },
+    { model_name: "ollama/bge-m3" },
+  ])
+  assert.deepEqual(pickGroups(groups, allowed).map((g) => g.model_group), ["deepseek-v4-pro"])
+  assert.ok(Math.abs(allowed.get("deepseek-v4-pro")!.cacheRead - 0.044) < 1e-9)
+  assert.equal(allowed.get("deepseek-v4-pro")!.cacheWrite, 0)
+  // /model/info unavailable → no filter, as before
+  assert.deepEqual(pickGroups(groups, undefined).map((g) => g.model_group), ["deepseek-v4-pro", "zai/glm-5.3"])
+  assert.equal(toModel(groups[0], allowed.get("deepseek-v4-pro")).cost.cacheRead, allowed.get("deepseek-v4-pro")!.cacheRead)
 })

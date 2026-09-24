@@ -5,8 +5,11 @@ by itself. Every model the proxy serves shows up in pi as `litellm/<model>` — 
 entries, nothing to update when the proxy changes. Sibling of
 [opencode-litellm-models](https://github.com/jorikfon/opencode-litellm-models).
 
-Models are read from LiteLLM's `GET /model_group/info` at startup (5 s timeout; on any error pi
-starts without the provider and prints a `[litellm]` warning).
+Models are read at startup from LiteLLM's `GET /model_group/info` (limits, prices, reasoning
+levels) and narrowed to the ones `GET /model/info` lists for your key, so a model the key may not
+call does not show up only to answer 403; prompt-cache prices come from `/model/info` too. If
+`/model/info` fails or is empty, every model group is shown. Both requests time out after 5 s; if
+`/model_group/info` fails, pi starts without the provider and prints a `[litellm]` warning.
 
 ## Install
 
@@ -50,6 +53,5 @@ levels as is; fix that on the LiteLLM side (`supports_reasoning: false` or the e
 
 ## Known limits
 
-- `/model_group/info` lists every public model group, not only what the key may call — a
-  model outside the key's team shows up and answers 403 `key_model_access_denied`.
-- Prompt-cache prices are not published by that endpoint, so `cacheRead`/`cacheWrite` cost is 0.
+- When `/model/info` is unavailable the list is not narrowed, and a model outside the key's team
+  answers 403 `key_model_access_denied`; cache prices are then 0.
